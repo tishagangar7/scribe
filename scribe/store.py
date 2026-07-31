@@ -148,6 +148,9 @@ class SQLiteStore:
             (run_id,),
         )
         row = await cur.fetchone()
+        # An aggregate query always yields exactly one row, but the driver's
+        # signature cannot express that. Assert rather than silently defaulting.
+        assert row is not None
         return int(row["n"])
 
     async def append_event(self, event: Event) -> int:

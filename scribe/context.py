@@ -18,7 +18,7 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any
 
 from scribe.errors import (
     DivergenceError,
@@ -28,9 +28,8 @@ from scribe.errors import (
 from scribe.models import Event, EventType, Run
 from scribe.store import Store
 
-T = TypeVar("T")
-
-StepFn = Callable[[], "T | Awaitable[T]"]
+# A step body: zero-arg, sync or async, returning a JSON-serializable value.
+type StepFn[T] = Callable[[], T | Awaitable[T]]
 
 
 class Context:
@@ -77,7 +76,7 @@ class Context:
         ]
         self._position = 0
 
-    async def step(self, step_id: str, fn: StepFn) -> Any:
+    async def step(self, step_id: str, fn: StepFn[Any]) -> Any:
         """Execute `fn` exactly once across all attempts of this run.
 
         Args:

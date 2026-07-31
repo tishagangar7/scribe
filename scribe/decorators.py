@@ -162,6 +162,8 @@ async def run_workflow(
     run_id: str | None = None,
 ) -> tuple[str, Any]:
     """Convenience: start (if new) and execute. Returns (run_id, result)."""
-    existing = await store.get_run(run_id) if run_id else None
-    rid = run_id if existing else await start_run(store, workflow_name, input, run_id)
+    if run_id is not None and await store.get_run(run_id) is not None:
+        rid = run_id  # resuming an existing run
+    else:
+        rid = await start_run(store, workflow_name, input, run_id)
     return rid, await execute_run(store, rid)
