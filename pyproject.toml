@@ -17,6 +17,9 @@ dev = [
     "mypy>=1.11",
     "pre-commit>=3.8",
 ]
+agent = [
+    "docker>=7.1",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -33,6 +36,15 @@ select = ["E", "F", "I", "UP", "B", "TID"]
 "agent".msg = "scribe/ must never import from agent/ - see ADR 0003"
 "api".msg = "scribe/ must never import from api/ - see ADR 0003"
 "eval".msg = "scribe/ must never import from eval/ - see ADR 0003"
+
+[tool.ruff.lint.per-file-ignores]
+# The banned-api rule above encodes ADR 0003: scribe/ never imports
+# agent/api/eval. It is not a ban on those packages existing or being
+# imported by each other -- scope TID251 to scribe/ only.
+"agent/**" = ["TID251"]
+"api/**" = ["TID251"]
+"eval/**" = ["TID251"]
+"tests/**" = ["TID251"]
 
 [tool.mypy]
 python_version = "3.12"
