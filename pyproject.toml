@@ -1,0 +1,40 @@
+[project]
+name = "scribe"
+version = "0.1.0"
+description = "Durable execution runtime for multi-agent LLM systems"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+    "aiosqlite>=0.20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.100",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pre-commit>=3.8",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"agent".msg = "scribe/ must never import from agent/ - see ADR 0003"
+"api".msg = "scribe/ must never import from api/ - see ADR 0003"
+"eval".msg = "scribe/ must never import from eval/ - see ADR 0003"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["scribe"]
