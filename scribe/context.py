@@ -15,6 +15,7 @@ network. Execution "fast-forwards" to the point of failure and continues.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import random as _random
@@ -61,6 +62,7 @@ class Context:
         self._now_calls = 0
         self._random_calls = 0
         self._uuid_calls = 0
+        self._gather_calls = 0
 
     @property
     def run_id(self) -> str:
@@ -69,6 +71,11 @@ class Context:
     @property
     def workflow_version(self) -> int:
         return self._run.workflow_version
+
+    @property
+    def step_sequence(self) -> list[str]:
+        """step_ids replayed/executed so far, in the order they occurred."""
+        return list(self._expected_order[: self._position])
 
     async def load_expected_order(self) -> None:
         """Read the recorded step order so divergence can be detected.
@@ -203,6 +210,55 @@ class Context:
         self._uuid_calls += 1
         raw = await self.step(step_id, lambda: str(_uuid.uuid4()))
         return _uuid.UUID(raw)
+
+    async def gather(self, *specs: tuple[str, StepFn[Any]]) -> list[Any]:
+        """Run several step bodies concurrently as one atomic step.
+
+        Each spec is `(step_id, fn)`. Returns results in the same order as
+        `specs` -- like `asyncio.gather` -- regardless of which finished
+        first for real.
+
+        The whole group is recorded as a single step under an
+        auto-generated id (`gather:0`, `gather:1`, ...): either every
+        member's result lands in the log together, or none of them do. On
+        replay the group is never re-run -- the recorded payload is
+        returned outright -- so completion order can vary freely between
+        record and any number of replays without ever being a divergence.
+        The actual completion order is kept in the payload under "order"
+        for observability, not because replay needs it.
+
+        Trading away partial credit for a mid-gather crash (all members
+        re-run together on resume, rather than only the unfinished ones)
+        keeps this consistent with how every other `ctx.step` already
+        behaves: a step is one atomic unit, done or not done.
+        """
+        seen_in_call: set[str] = set()
+        for step_id, _ in specs:
+            if step_id in seen_in_call:
+                raise DuplicateStepError(self.run_id, step_id)
+            seen_in_call.add(step_id)
+
+        group_id = f"gather:{self._gather_calls}"
+        self._gather_calls += 1
+
+        async def run_one(step_id: str, fn: StepFn[Any]) -> tuple[str, Any]:
+            result = fn()
+            if inspect.isawaitable(result):
+                result = await result
+            return step_id, result
+
+        async def run_all() -> dict[str, Any]:
+            tasks = [asyncio.create_task(run_one(sid, fn)) for sid, fn in specs]
+            order: list[str] = []
+            results: dict[str, Any] = {}
+            for finished in asyncio.as_completed(tasks):
+                step_id, result = await finished
+                order.append(step_id)
+                results[step_id] = result
+            return {"order": order, "results": results}
+
+        payload = await self.step(group_id, run_all)
+        return [payload["results"][step_id] for step_id, _ in specs]
 
     def _check_divergence(self, step_id: str) -> None:
         if self._position >= len(self._expected_order):

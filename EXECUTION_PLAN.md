@@ -240,11 +240,11 @@ The intellectually hardest sprint. This is the part that is genuinely difficult 
 - **DA-126 [S]** `da replay --all` CLI command.
 
 **Sprint 2 exit criteria**
-- [ ] 20/20 recorded runs replay to identical results, offline, at $0, in seconds
-- [ ] Hypothesis property test green over ≥ 100 generated workflows
-- [ ] A nondeterministic workflow is caught by CI lint *and* by `DivergenceError` at runtime
-- [ ] Fault injection can force a failure at an arbitrary step
-- [ ] Replay overhead measured and recorded
+- [x] 20/20 recorded runs replay to identical results, offline, at $0, in seconds
+- [x] Hypothesis property test green over ≥ 100 generated workflows
+- [x] A nondeterministic workflow is caught by CI lint *and* by `DivergenceError` at runtime
+- [x] Fault injection can force a failure at an arbitrary step
+- [x] Replay overhead measured and recorded
 
 ---
 

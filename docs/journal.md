@@ -117,3 +117,104 @@ already use.
 `datetime.now`/`random.*`/`uuid.uuid4`/`os.environ` inside `@workflow`
 functions, wired into CI), then DA-119/120 `ctx.gather` deterministic
 ordering.
+
+---
+
+## Sprint 2 — Aug 10, continued (CI fix)
+
+**Done:** The push that landed DA-301/302 also triggered the first CI run
+ever to exercise `tests/test_sandbox.py`, and it failed: `PermissionError`
+removing `__pycache__` out of the sandbox's temp dir during cleanup.
+`agent/sandbox.py`'s `_run_container` never set a container user, so it ran
+as root inside `python:3.12-slim`; on GitHub's real Linux bind mount (unlike
+Docker Desktop's file-sharing shim on macOS, which had been quietly masking
+this), anything the container wrote into the bind-mounted repo landed on the
+host owned by root, and the non-root CI runner couldn't clean it up
+afterward. Fixed by passing `user=f"{os.getuid()}:{os.getgid()}"` to
+`containers.run` so the container can never leave root-owned files behind.
+
+**Learned:** local-only testing on macOS is not sufficient evidence a Docker
+sandbox is correct -- Docker Desktop's file-sharing layer remaps container-
+root writes back to the host user, hiding exactly this class of bug. The
+real check only happened once CI (a genuine Linux host) ran it.
+
+**Blockers:** none.
+
+---
+
+## Sprint 2 — Aug 11–16 (close-out)
+
+**Done:** Finished everything remaining in the sprint plan.
+- **DA-115** `docs/adr/0004-divergence-is-fatal.md` (the plan calls it ADR
+  0002, but 0001-0003 were already taken by Sprint 0/1 decisions).
+- **DA-116/117/118** `scribe/lint.py` -- AST-based checker walking every
+  `@workflow` function's body for `datetime.now`/`.utcnow`, `time.time`,
+  `random.*`, `uuid.uuid4`, and `os.environ`/`os.getenv`, resolving simple
+  `import x [as y]` / `from x import y [as z]` aliasing so it isn't fooled
+  by renaming. Wired into `.github/workflows/ci.yml` as its own step, run
+  over `agent scribe eval`. 12 tests in `tests/test_lint.py`.
+- **DA-119/120** `Context.gather(*specs)` -- runs step bodies concurrently
+  but records the whole group as *one* atomic step (payload holds the
+  results plus the real completion order, kept for observability). Replay
+  never re-runs the group, so completion order can vary freely between the
+  recording and any number of replays without ever counting as divergence.
+  Trade-off, noted in the docstring: a crash mid-gather re-runs the whole
+  group on resume rather than only the unfinished member, same as any other
+  single `ctx.step`. 4 tests in `tests/test_gather.py`, including 10 forced
+  resumes with randomized durations each time, asserting identical ordering
+  every time.
+- **DA-121/122/124** `scribe/replay.py` -- `replay(store, run_id, inject=...)`
+  re-invokes the workflow body through a `_ReplayContext` that raises
+  `ReplayIncompleteError` instead of ever executing a step the log doesn't
+  already have (the "network disabled" requirement, enforced structurally),
+  and can force an arbitrary already-succeeded step to fail via `inject=
+  {step_id: ExceptionType}` for testing recovery paths without needing a
+  real historical failure. `replay_all(store)` runs every run in a store as
+  a regression suite. 7 tests in `tests/test_replay.py`, including one that
+  swaps in a step body that fails the test outright if replay ever calls it
+  for real -- the strongest possible proof replay never executes live.
+- **DA-123** `tests/test_property_replay.py` -- Hypothesis generates random
+  workflow shapes (plain steps, gathers, and branches nested two levels
+  deep) interpreted by one generic `shape_runner` workflow; for each of 100
+  generated shapes, record then replay and assert identical result and step
+  sequence. Far stronger evidence than any hand-picked example.
+- **DA-125** `replay_evidence.py` (standalone script, not CI -- deliberately
+  runs the real-latency `research` workflow from `demo.py`, sleeps and
+  simulated failures included): recorded 20 real runs, replayed all 20.
+  **20/20 identical.** Direct execution: 261.5s total (13.1s/run average,
+  including retries against the ~35% simulated failure rate). Replay: 0.061s
+  total. **~4,310x speedup, offline, $0.**
+- **DA-126** `scribe/cli.py`, `da` console script (`[project.scripts]`,
+  required adding a `[build-system]`/hatchling section since the project had
+  never been packaged before). `da replay --all --db PATH --import MODULE`.
+  The `--import` flag exists because the workflow registry is in-process
+  only -- a real `da` invocation starts with an empty registry, so it has to
+  be told which module's `@workflow` decorators to run first, or every
+  replay fails with `WorkflowNotFoundError`. Caught this by actually running
+  the built `da` binary end-to-end against a real db in a fresh process,
+  not just calling `main()` in-process the way the unit tests do.
+
+**Learned:** the property test (DA-123) and the swap-in-a-failing-step-body
+test in `test_replay.py` are the two pieces of evidence worth leading with
+in an interview -- one is breadth (100 generated shapes), the other is a
+single airtight example (replay provably never executes anything for real).
+Also: a CLI wrapping in-process state (the workflow registry) needs its own
+end-to-end smoke test run as a real subprocess -- calling `main()` directly
+from a test that already populated the registry hides exactly the failure
+mode a real user hits first.
+
+**Blockers:** none.
+
+**Sprint 2 exit criteria: all met.**
+- [x] 20/20 recorded runs replay to identical results, offline, at $0, in seconds
+- [x] Hypothesis property test green over >= 100 generated workflows
+- [x] A nondeterministic workflow is caught by CI lint *and* by `DivergenceError` at runtime
+- [x] Fault injection can force a failure at an arbitrary step
+- [x] Replay overhead measured and recorded
+
+**Next:** Sprint 3 -- retrieval (tree-sitter chunking), hybrid BM25/dense
+search, the LangGraph agent graph (retrieve -> plan -> code -> critic ->
+test), budgets and cancellation, fork into parallel candidates. Needs an
+LLM API key (none configured yet -- `.env` doesn't exist, only
+`.env.example`) and new heavy dependencies not yet installed: `langgraph`,
+`tree-sitter`, `sentence-transformers`, `rank_bm25`.

@@ -29,5 +29,8 @@ jobs:
       - name: Type check
         run: uv run mypy scribe/
 
+      - name: Determinism lint
+        run: uv run python -m scribe.lint agent scribe eval
+
       - name: Test
         run: uv run pytest -v

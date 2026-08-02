@@ -28,6 +28,7 @@ class Store(Protocol):
     async def next_seq(self, run_id: str) -> int: ...
     async def get_completed_step(self, run_id: str, step_id: str) -> Event | None: ...
     async def read_log(self, run_id: str) -> list[Event]: ...
+    async def list_run_ids(self) -> list[str]: ...
 
 
 def _dumps(value: Any) -> str | None:
@@ -200,6 +201,10 @@ class SQLiteStore:
             "SELECT * FROM events WHERE run_id = ? ORDER BY seq", (run_id,)
         )
         return [self._row_to_event(r) for r in await cur.fetchall()]
+
+    async def list_run_ids(self) -> list[str]:
+        cur = await self._conn.execute("SELECT run_id FROM runs ORDER BY created_at")
+        return [row["run_id"] for row in await cur.fetchall()]
 
     @staticmethod
     def _row_to_event(row: aiosqlite.Row) -> Event:
