@@ -12,6 +12,7 @@ container never touches the network.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -117,6 +118,11 @@ def _run_container(
         command=["sh", "-c", test_command],
         working_dir="/repo",
         volumes={str(work_dir): {"bind": "/repo", "mode": "rw"}},
+        # Run as the host uid/gid so anything the test command writes into
+        # the bind mount (e.g. __pycache__) is owned by us, not root -- on a
+        # real Linux bind mount, root-owned files left in the host tmp dir
+        # can't be cleaned up by the (non-root) caller afterward.
+        user=f"{os.getuid()}:{os.getgid()}",
         network_mode="none",
         mem_limit=memory_limit,
         detach=True,
