@@ -20,6 +20,9 @@ dev = [
 agent = [
     "docker>=7.1",
 ]
+eval = [
+    "datasets>=3.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
