@@ -81,3 +81,39 @@ instances.
 
 **Next:** Sprint 2 -- determinism interception (`ctx.now`/`random`/`uuid`),
 divergence detection hardening, `ctx.gather` deterministic ordering.
+
+---
+
+## Sprint 2 — Aug 10
+
+**Done:** DA-111 `Context.now()`/`random()`/`uuid()` in `scribe/context.py` --
+each is an ordinary `ctx.step` under the hood (`ctx.now:0`, `ctx.random:0`,
+`ctx.uuid:0`, ...), so the value is recorded on first execution and served
+from the log on every replay instead of hitting the real clock/RNG again.
+Repeated calls within one workflow get distinct auto-incrementing step_ids so
+they don't collide as duplicates. DA-112 `tests/test_determinism.py`: a
+workflow branching on `ctx.now().hour`, recorded with the clock monkeypatched
+to 9am, then "resumed" (status forced back to RUNNING, simulating a crash
+right before RUN_COMPLETED lands) with the clock monkeypatched to 11pm --
+replay still returns the 9am branch. Same technique for `ctx.random()` and
+`ctx.uuid()`. 5 new tests green, 24 total (sandbox suite needs Docker, run
+separately).
+
+**Learned:** DA-113 (divergence detection) turned out to already exist --
+`Context._check_divergence` and the position check in the execute path were
+built into `scribe/context.py` back in Sprint 1, and `DivergenceError`'s
+message already pointed at `ctx.now`/`ctx.random`/`ctx.uuid` as the fix. So
+this sprint's real remaining scope was narrower than planned: just DA-111/112.
+Testing replay-stability for a completed run needs care -- `execute_run`
+short-circuits and returns the cached result without touching the workflow
+body at all once `status == COMPLETED`, so proving replay (not just
+memoization) requires forcing the run back to `RUNNING` first, the same
+"crash before the final status write lands" scenario the durability tests
+already use.
+
+**Blockers:** none.
+
+**Next:** DA-116/117/118 static lint (`runtime/lint.py`, flagging
+`datetime.now`/`random.*`/`uuid.uuid4`/`os.environ` inside `@workflow`
+functions, wired into CI), then DA-119/120 `ctx.gather` deterministic
+ordering.

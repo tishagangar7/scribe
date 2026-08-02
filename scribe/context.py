@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import inspect
 import json
+import random as _random
+import uuid as _uuid
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
 from scribe.errors import (
@@ -25,7 +28,7 @@ from scribe.errors import (
     DuplicateStepError,
     NonSerializableResultError,
 )
-from scribe.models import Event, EventType, Run
+from scribe.models import Event, EventType, Run, utcnow
 from scribe.store import Store
 
 # A step body: zero-arg, sync or async, returning a JSON-serializable value.
@@ -52,6 +55,12 @@ class Context:
         # Counters for observability -- how much did resumption actually save?
         self.steps_replayed = 0
         self.steps_executed = 0
+
+        # Per-call counters so repeated ctx.now()/random()/uuid() calls each
+        # get a distinct, stable step_id without the workflow author naming one.
+        self._now_calls = 0
+        self._random_calls = 0
+        self._uuid_calls = 0
 
     @property
     def run_id(self) -> str:
@@ -167,6 +176,33 @@ class Context:
         self._expected_order.append(step_id)
         self.steps_executed += 1
         return result
+
+    async def now(self) -> datetime:
+        """Replay-stable wall clock. Never call `datetime.now()` in a workflow.
+
+        The value is recorded as an ordinary step on first execution; every
+        replay returns that same recorded instant regardless of when the
+        replay actually runs, so branching on it (e.g. `ctx.now().hour`)
+        takes the same path every time.
+        """
+        step_id = f"ctx.now:{self._now_calls}"
+        self._now_calls += 1
+        iso = await self.step(step_id, lambda: utcnow().isoformat())
+        return datetime.fromisoformat(iso)
+
+    async def random(self) -> float:
+        """Replay-stable `random.random()`. Never call `random.*` directly."""
+        step_id = f"ctx.random:{self._random_calls}"
+        self._random_calls += 1
+        result: float = await self.step(step_id, _random.random)
+        return result
+
+    async def uuid(self) -> _uuid.UUID:
+        """Replay-stable `uuid.uuid4()`. Never call `uuid.uuid4()` directly."""
+        step_id = f"ctx.uuid:{self._uuid_calls}"
+        self._uuid_calls += 1
+        raw = await self.step(step_id, lambda: str(_uuid.uuid4()))
+        return _uuid.UUID(raw)
 
     def _check_divergence(self, step_id: str) -> None:
         if self._position >= len(self._expected_order):
