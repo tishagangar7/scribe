@@ -103,16 +103,16 @@ async def test_graph_resumes_after_a_crash_without_redoing_completed_nodes(
     code_attempts = {"n": 0}
 
     class FlakyOnFirstCodeCallLLM:
-        async def complete(self, node: str, prompt: str) -> str:
+        async def complete(self, node: str, prompt: str) -> tuple[str, int, float]:
             call_counts[node] += 1
             if node == "code" and code_attempts["n"] == 0:
                 code_attempts["n"] += 1
                 raise ConnectionError("simulated rate limit")
             if node == "plan":
-                return "a plan"
+                return "a plan", 0, 0.0
             if node == "code":
-                return "a patch"
-            return "looks fine"
+                return "a patch", 0, 0.0
+            return "looks fine", 0, 0.0
 
     llm = FlakyOnFirstCodeCallLLM()
     fake_run_test = _fake_test_runner(

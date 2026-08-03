@@ -12,6 +12,8 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "sentence-transformers>=5.6.1",
     "numpy>=2.5.1",
+    "anthropic>=0.120.2",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]

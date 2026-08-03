@@ -41,8 +41,14 @@ TestRunner = Callable[[Path, str | None, str], SandboxResult]
 
 
 class LLMClient(Protocol):
-    async def complete(self, node: str, prompt: str) -> str: ...
-    async def complete_many(self, node: str, prompt: str, n: int) -> list[str]: ...
+    """`complete`/`complete_many` return `(result, tokens, cost_usd)` --
+    the shape `ctx.llm_step` expects, so every call (real or stubbed) flows
+    through the run's token/cost budget accounting the same way."""
+
+    async def complete(self, node: str, prompt: str) -> tuple[str, int, float]: ...
+    async def complete_many(
+        self, node: str, prompt: str, n: int
+    ) -> tuple[list[str], int, float]: ...
 
 
 class StubLLMClient:
@@ -53,6 +59,7 @@ class StubLLMClient:
     can script "the first patch is broken, the second one fixes it."
     `many_responses[node]` backs `complete_many` -- a fixed list of N
     candidates returned by one call, for the fork-based multi-candidate path.
+    Always reports 0 tokens / $0 cost -- it never calls anything real.
     """
 
     def __init__(
@@ -64,16 +71,18 @@ class StubLLMClient:
         self._many_responses = many_responses or {}
         self._calls: dict[str, int] = {}
 
-    async def complete(self, node: str, prompt: str) -> str:
+    async def complete(self, node: str, prompt: str) -> tuple[str, int, float]:
         response = self._responses[node]
         if isinstance(response, str):
-            return response
+            return response, 0, 0.0
         i = self._calls.get(node, 0)
         self._calls[node] = i + 1
-        return response[min(i, len(response) - 1)]
+        return response[min(i, len(response) - 1)], 0, 0.0
 
-    async def complete_many(self, node: str, prompt: str, n: int) -> list[str]:
-        return self._many_responses[node][:n]
+    async def complete_many(
+        self, node: str, prompt: str, n: int
+    ) -> tuple[list[str], int, float]:
+        return self._many_responses[node][:n], 0, 0.0
 
 
 class AgentState(TypedDict, total=False):
@@ -138,19 +147,23 @@ def build_graph(
     async def plan_node(state: AgentState) -> dict[str, Any]:
         attempt = state.get("attempt", 0)
         prompt = _plan_prompt(state["issue"], state["chunks"])
-        plan = await ctx.step(f"plan:{attempt}", lambda: llm.complete("plan", prompt))
+        plan = await ctx.llm_step(
+            f"plan:{attempt}", lambda: llm.complete("plan", prompt)
+        )
         return {"plan": plan}
 
     async def code_node(state: AgentState) -> dict[str, Any]:
         attempt = state.get("attempt", 0)
         prompt = _code_prompt(state["issue"], state["plan"], state["chunks"])
-        patch = await ctx.step(f"code:{attempt}", lambda: llm.complete("code", prompt))
+        patch = await ctx.llm_step(
+            f"code:{attempt}", lambda: llm.complete("code", prompt)
+        )
         return {"patch": patch}
 
     async def critic_node(state: AgentState) -> dict[str, Any]:
         attempt = state.get("attempt", 0)
         prompt = _critic_prompt(state["patch"])
-        notes = await ctx.step(
+        notes = await ctx.llm_step(
             f"critic:{attempt}", lambda: llm.complete("critic", prompt)
         )
         return {"critic_notes": notes}
@@ -262,7 +275,7 @@ async def run_child_candidate(
 
     patch = candidates[candidate_index]
     critic_prompt = _critic_prompt(patch)
-    await ctx.step(
+    await ctx.llm_step(
         f"critic:{candidate_index}", lambda: llm.complete("critic", critic_prompt)
     )
 
@@ -309,9 +322,9 @@ async def run_agent_with_fork(
 
     chunks = await ctx.step("retrieve", do_retrieve)
     plan_prompt = _plan_prompt(issue, chunks)
-    plan = await ctx.step("plan", lambda: llm.complete("plan", plan_prompt))
+    plan = await ctx.llm_step("plan", lambda: llm.complete("plan", plan_prompt))
     code_prompt = _code_prompt(issue, plan, chunks)
-    candidates: list[str] = await ctx.step(
+    candidates: list[str] = await ctx.llm_step(
         "code:candidates",
         lambda: llm.complete_many("code", code_prompt, n_candidates),
     )
