@@ -84,6 +84,47 @@ class RunNotFoundError(RuntimeError_):
         self.run_id = run_id
 
 
+class BudgetExceededError(RuntimeError_):
+    """The run's token or cost budget is already spent before an LLM step.
+
+    Non-fatal in the sense that matters: no event is written for the step
+    that tripped this, so the log is unchanged and fully resumable. Raise
+    the budget on the run and call execute_run again with the same run_id
+    to continue exactly where this left off.
+    """
+
+    def __init__(
+        self, run_id: str, step_id: str, resource: str, used: float, budget: float
+    ) -> None:
+        super().__init__(
+            f"run {run_id!r} exceeded its {resource} budget before step "
+            f"{step_id!r}: used {used}, budget {budget}. Raise the budget and "
+            f"re-run with the same run_id to resume -- no work is lost."
+        )
+        self.run_id = run_id
+        self.step_id = step_id
+        self.resource = resource
+        self.used = used
+        self.budget = budget
+
+
+class RunCancelledError(RuntimeError_):
+    """The run was cancelled; a step boundary noticed and stopped.
+
+    Checked fresh from the store at each step boundary (not just once at
+    startup) so cancelling a long-running workflow from another process
+    takes effect before its next paid step, not only before its next
+    process restart.
+    """
+
+    def __init__(self, run_id: str, step_id: str) -> None:
+        super().__init__(
+            f"run {run_id!r} was cancelled; stopping before step {step_id!r}."
+        )
+        self.run_id = run_id
+        self.step_id = step_id
+
+
 class WorkflowNotFoundError(RuntimeError_):
     def __init__(self, name: str) -> None:
         super().__init__(

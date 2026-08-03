@@ -218,3 +218,124 @@ test), budgets and cancellation, fork into parallel candidates. Needs an
 LLM API key (none configured yet -- `.env` doesn't exist, only
 `.env.example`) and new heavy dependencies not yet installed: `langgraph`,
 `tree-sitter`, `sentence-transformers`, `rank_bm25`.
+
+---
+
+## Sprint 3 — Aug 17–23 (close-out)
+
+**Scope decision up front:** no LLM API key is configured this session --
+`.env` still doesn't exist. Rather than block on that, the call was to
+build and genuinely test every piece of Sprint 3's *infrastructure* against
+real execution (real tree-sitter parsing, a real local embedding model,
+the real Sprint 1 Docker sandbox), with the LLM behind an injectable
+`LLMClient` interface served by a scripted `StubLLMClient` instead of a
+live, billed call. DA-213's actual resolve-rate comparison against Sprint
+1's baseline needs a real model reasoning about real issues; a stub can't
+produce that number honestly, so it's the one piece left undone. Everything
+else shipped and is tested for real.
+
+**Done:**
+- **DA-205/206** `agent/retrieval.py` -- tree-sitter chunks Python repos at
+  function/class granularity (top-level only; methods stay embedded in
+  their class's chunk, nested helpers stay embedded in their parent
+  function -- a method or nested helper read alone usually loses the
+  context that makes it useful). 8 tests, including exact line-boundary
+  assertions against real parsed source.
+- **DA-207/208/209** `agent/search.py` -- `BM25Index` (rank_bm25),
+  `DenseIndex` (real `all-MiniLM-L6-v2` embeddings via sentence-
+  transformers, brute-force cosine), fused by reciprocal rank fusion.
+  `retrieve(issue, repo, k, strategy=...)` selects hybrid/bm25/dense so
+  Sprint 4's ablations can measure each alone. 9 tests, including one
+  proving dense retrieval finds a match with zero shared vocabulary
+  (the case BM25 structurally can't handle).
+- **DA-210/211** `agent/graph.py` -- LangGraph nodes
+  `retrieve -> plan -> code -> critic -> test`, a conditional retry edge
+  `test -> plan` on failure, and a step cap via `recursion_limit`. Every
+  node's real work is a `ctx.step`, so LangGraph owns control flow and
+  `Context` owns durability -- they compose without either knowing about
+  the other. Proved genuinely end-to-end (DA-211): retrieval is real,
+  the retry loop is real, and the "test" node runs the real Sprint 1
+  Docker sandbox against a real toy repo -- only `plan`/`code`/`critic`
+  are stubbed. A second test crashes the graph mid-pipeline (the LLM
+  raises on its first "code" call) and proves resuming replays "plan"
+  from the log rather than re-calling the LLM -- the durability guarantee
+  holds across a multi-node LangGraph pipeline, not just a flat workflow.
+- **DA-127/129** `Context.llm_step` -- like `ctx.step`, but for calls that
+  cost tokens/money: checks the run's budget *before* executing, records
+  actual usage on the completion event, and never re-spends on replay
+  (usage is summed once from the log in `load_expected_order`, the same
+  "never trust a separately-maintained running total" reasoning as
+  `_expected_order` itself). A tiny budget halts with `BudgetExceededError`
+  / status `BUDGET_EXCEEDED`; raising the cap and resuming completes
+  cleanly without re-paying for the step that already succeeded.
+- **DA-128** `scribe/cancel.py` -- `cancel_run` marks a run and every
+  descendant (via `parent_run_id`, walked transitively) cancelled, skipping
+  anything already terminal. `Context.step`/`llm_step` check for
+  cancellation fresh from the store at every new step boundary, so an
+  in-flight run notices a cancellation issued by another coroutine/process
+  before its next paid step, not just on its next fresh invocation.
+- **DA-130/131/132** `scribe/fork.py` -- `fork(store, run_id, at_seq)`
+  creates a child with `parent_run_id`/`forked_at_seq`; **no rows are ever
+  copied**. `Context._inherited_events` walks the parent chain once, at
+  construction, building a `step_id -> Event` dict from each ancestor's
+  own log truncated to that link's fork boundary; `step`/`llm_step` check
+  that dict as a fallback when a step_id isn't in the run's own (much
+  shorter) physical log. Recursive forks (a fork of a fork) work for free
+  since the walk recurses up `parent_run_id` however deep it goes. 5 tests,
+  including a 3-generation chain and confirming divergence detection still
+  covers the inherited prefix, not just a run's own log.
+- **DA-212/133** `agent/graph.py` (`run_agent_with_fork`,
+  `run_child_candidate`) -- the Coder generates N candidates in one
+  `ctx.step`, forks one child per candidate (all inheriting retrieve/plan/
+  candidates at $0), races them with `asyncio.wait(FIRST_COMPLETED)`, and
+  genuinely cancels whichever are still in flight the moment one passes --
+  proved with a fake test runner where the winner returns instantly and
+  every loser is asleep on a real, cancellable `await`, not just bookkept
+  as "not the winner" after finishing anyway. `da fork <run_id> --at SEQ
+  --db PATH` CLI command.
+
+**Learned:**
+- The costly assumption to catch early: `asyncio.gather`-then-cancel is not
+  the same as "first passing wins, others cancelled." Gather waits for
+  everything first, so by the time you'd cancel a loser it has usually
+  already finished -- there's nothing left to stop. Real early-exit
+  cancellation needs `asyncio.wait(..., return_when=FIRST_COMPLETED)` in a
+  loop, breaking the moment a winner appears, and only then cancelling
+  whatever's still pending.
+- A blocking `time.sleep()` inside a coroutine can't be interrupted by
+  `asyncio.Task.cancel()` -- cancellation only takes effect at an `await`
+  point. Testing genuine mid-flight cancellation needs the fake work under
+  test to actually `await asyncio.sleep(...)`, not block synchronously.
+- `SQLiteStore.update_run`'s original UPDATE statement didn't touch
+  `token_budget`/`cost_budget_usd` at all -- meaning "raise the cap and
+  resume" (the entire point of `BUDGET_EXCEEDED` being non-terminal) would
+  have silently failed to persist the raised cap. Caught by DA-129's test
+  actually trying to raise the budget and resume, not just checking that
+  the halt happened.
+- `execute_run`'s except-block originally set status FAILED unconditionally,
+  which would stomp a CANCELLED status back to FAILED whenever a
+  `RunCancelledError` propagated out of a workflow that was cancelled
+  mid-flight by another coroutine. Fixed by having `execute_run` set
+  CANCELLED explicitly for that exception type rather than trusting the
+  in-memory `Run` object (owned by a different call site) to already
+  reflect it.
+- Packaging the project (adding `[build-system]`/hatchling back in Sprint 2
+  for the `da` console script) turned out to matter again here: without it,
+  `agent`/`eval` risked not being on the installed package's path at all.
+  Verified empirically both times rather than assumed.
+
+**Blockers:** DA-213's resolve-rate comparison needs a real LLM API key.
+To unblock: add `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`) to `.env`, write
+a thin real `LLMClient` implementation (the interface in `agent/graph.py`
+already exists: `complete(node, prompt) -> str`, `complete_many(node,
+prompt, n) -> list[str]`), swap it in for `StubLLMClient` in `run_agent`/
+`run_agent_with_fork`, and run both against the same 10 SWE-bench-lite
+issues `eval/swebench.py` can already load. Everything downstream of "get
+an LLM response" -- retrieval, the graph, retries, forking, budgets,
+cancellation, durability -- is already built and tested.
+
+**Sprint 3 exit criteria: 3 of 4 met; the 4th is blocked on an API key, not broken.**
+- [ ] Multi-agent graph resolves strictly more issues than the naive baseline (blocked -- see above)
+- [x] A run forks into 3 children sharing the parent prefix with zero re-execution
+- [x] Cancelling a parent cancels every descendant; no orphaned runs keep spending
+- [x] A run halted by budget resumes cleanly after the cap is raised

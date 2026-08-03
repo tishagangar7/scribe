@@ -121,12 +121,20 @@ class SQLiteStore:
         )
 
     async def update_run(self, run: Run) -> None:
+        """Persist the run's mutable fields, including budgets.
+
+        Budgets are here (not just status/result/spend) because raising a
+        budget on a BUDGET_EXCEEDED run -- the whole point of that status
+        being non-terminal -- has to actually reach the database, or a
+        raised cap would silently keep tripping the same check.
+        """
         run.updated_at = utcnow()
         await self._conn.execute(
             """
             UPDATE runs SET
                 status = ?, result = ?, error = ?, tokens_used = ?,
-                cost_used_usd = ?, updated_at = ?
+                cost_used_usd = ?, token_budget = ?, cost_budget_usd = ?,
+                updated_at = ?
             WHERE run_id = ?
             """,
             (
@@ -135,6 +143,8 @@ class SQLiteStore:
                 run.error,
                 run.tokens_used,
                 run.cost_used_usd,
+                run.token_budget,
+                run.cost_budget_usd,
                 run.updated_at.isoformat(),
                 run.run_id,
             ),

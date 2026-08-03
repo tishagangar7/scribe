@@ -1,7 +1,8 @@
-"""DA-126 -- the `da` command line tool.
+"""DA-126/133 -- the `da` command line tool.
 
-One subcommand today: `da replay --all --db PATH` runs every recorded run in
-a store as an offline regression suite and reports pass/fail.
+`da replay --all --db PATH` runs every recorded run in a store as an
+offline regression suite and reports pass/fail. `da fork <run_id> --at SEQ
+--db PATH` creates a child run inheriting everything up to that seq.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import argparse
 import asyncio
 import importlib
 
+from scribe.fork import fork
 from scribe.replay import ReplaySuiteResult, replay_all
 from scribe.store import SQLiteStore
 
@@ -18,6 +20,14 @@ async def _replay_all(db_path: str) -> ReplaySuiteResult:
     store = await SQLiteStore.open(db_path)
     try:
         return await replay_all(store)
+    finally:
+        await store.close()
+
+
+async def _fork(db_path: str, run_id: str, at_seq: int) -> str:
+    store = await SQLiteStore.open(db_path)
+    try:
+        return await fork(store, run_id, at_seq)
     finally:
         await store.close()
 
@@ -58,6 +68,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    fork_parser = subparsers.add_parser(
+        "fork", help="fork a run: create a child inheriting a prefix of its log"
+    )
+    fork_parser.add_argument("run_id", help="run_id to fork from")
+    fork_parser.add_argument(
+        "--at", required=True, type=int, metavar="SEQ", help="seq to fork at"
+    )
+    fork_parser.add_argument("--db", required=True, help="path to the SQLite store")
+
     args = parser.parse_args(argv)
 
     if args.command == "replay":
@@ -66,6 +85,11 @@ def main(argv: list[str] | None = None) -> int:
         suite = asyncio.run(_replay_all(args.db))
         _print_report(suite)
         return 0 if suite.all_passed else 1
+
+    if args.command == "fork":
+        child_id = asyncio.run(_fork(args.db, args.run_id, args.at))
+        print(child_id)
+        return 0
 
     parser.error(f"unknown command {args.command!r}")
     return 2

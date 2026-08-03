@@ -286,10 +286,15 @@ The intellectually hardest sprint. This is the part that is genuinely difficult 
 - **DA-133 [S]** `da fork <run_id> --at <seq>` CLI command.
 
 **Sprint 3 exit criteria**
-- [ ] Multi-agent graph resolves strictly more issues than the naive baseline
-- [ ] A run forks into 3 children sharing the parent prefix with zero re-execution
-- [ ] Cancelling a parent cancels every descendant; no orphaned runs keep spending
-- [ ] A run halted by budget resumes cleanly after the cap is raised
+- [ ] Multi-agent graph resolves strictly more issues than the naive baseline --
+      **blocked, not failed**: no LLM API key is configured this session (by
+      choice, to avoid spending without sign-off), so plan/code run on a
+      scripted `StubLLMClient` with no real reasoning. Comparing "resolve
+      rate" against a stub is meaningless. See docs/journal.md Sprint 3
+      close-out for exactly what's needed to unblock this later.
+- [x] A run forks into 3 children sharing the parent prefix with zero re-execution
+- [x] Cancelling a parent cancels every descendant; no orphaned runs keep spending
+- [x] A run halted by budget resumes cleanly after the cap is raised
 
 ---
 

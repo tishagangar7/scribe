@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from scribe.context import Context
-from scribe.errors import WorkflowNotFoundError
+from scribe.errors import (
+    BudgetExceededError,
+    RunCancelledError,
+    RunNotFoundError,
+    WorkflowNotFoundError,
+)
 from scribe.models import Event, EventType, Run, RunStatus, utcnow
 from scribe.store import Store
 
@@ -102,12 +107,13 @@ async def execute_run(store: Store, run_id: str) -> Any:
     """
     run = await store.get_run(run_id)
     if run is None:
-        from scribe.errors import RunNotFoundError
-
         raise RunNotFoundError(run_id)
 
     if run.status is RunStatus.COMPLETED:
         return run.result
+
+    if run.status is RunStatus.CANCELLED:
+        raise RunCancelledError(run_id, "<start>")
 
     wf = get_workflow(run.workflow_name)
 
@@ -125,8 +131,18 @@ async def execute_run(store: Store, run_id: str) -> Any:
         else:
             result = await wf.fn(ctx, run.input)
     except Exception as exc:
-        run.status = RunStatus.FAILED
+        if isinstance(exc, BudgetExceededError):
+            run.status = RunStatus.BUDGET_EXCEEDED
+        elif isinstance(exc, RunCancelledError):
+            # Set explicitly rather than trusting this in-memory `run` to
+            # already reflect it -- whatever cancelled it (another process,
+            # in the distributed case) mutated a different Run instance.
+            run.status = RunStatus.CANCELLED
+        else:
+            run.status = RunStatus.FAILED
         run.error = f"{type(exc).__name__}: {exc}"
+        run.tokens_used = ctx.tokens_used
+        run.cost_used_usd = ctx.cost_used_usd
         run.updated_at = utcnow()
         await store.update_run(run)
         await store.append_event(
@@ -142,6 +158,8 @@ async def execute_run(store: Store, run_id: str) -> Any:
 
     run.status = RunStatus.COMPLETED
     run.result = result
+    run.tokens_used = ctx.tokens_used
+    run.cost_used_usd = ctx.cost_used_usd
     run.updated_at = utcnow()
     await store.update_run(run)
     await store.append_event(

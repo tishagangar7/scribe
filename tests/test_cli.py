@@ -137,3 +137,29 @@ def test_import_flag_registers_workflows_in_a_fresh_registry(tmp_path, capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert "1/1 runs replayed identically." in out
+
+
+def test_fork_creates_a_child_and_prints_its_run_id(tmp_path, capsys):
+    db = tmp_path / "fork.db"
+
+    @workflow(name="steppy")
+    async def steppy(ctx):
+        await ctx.step("a", lambda: "a")
+        return await ctx.step("b", lambda: "b")
+
+    async def setup() -> tuple[str, int]:
+        store = await SQLiteStore.open(db)
+        run_id = await start_run(store, "steppy")
+        await execute_run(store, run_id)
+        event = await store.get_completed_step(run_id, "a")
+        await store.close()
+        return run_id, event.seq
+
+    run_id, at_seq = asyncio.run(setup())
+
+    code = main(["fork", run_id, "--at", str(at_seq), "--db", str(db)])
+    out = capsys.readouterr().out.strip()
+
+    assert code == 0
+    assert out  # the printed child run_id
+    assert out != run_id
